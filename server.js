@@ -15,36 +15,20 @@ const MAX_HISTORY = 500;
 const APP_ID = "Tele@idol_vannhat";
 
 // ------------------ Config weights ------------------
-let W_MARKOV = 0.20;
+let W_MARKOV = 0.18;
 let W_PATTERN = 0.20;
 let W_LOCAL_TREND = 0.15;
 let W_GLOBAL_FREQ = 0.10;
-let W_AI_SELF_LEARN = 0.10;
+let W_AI_SELF_LEARN = 0.12;
 let W_THUAT_TOAN_200 = 0.15;
 let W_BAYES = 0.10;
 let W_MONTECARLO = 0.05;
-let W_EXPERT_ENSEMBLE = 0.15;
 let W_NGRAM = 0.10;
+let W_KALMAN = 0.10; // New: Kalman Filter weight
+let W_LSTM_SIM = 0.10; // New: LSTM-like simulation weight
 
 const CONF_MIN = 55.0;
 const CONF_MAX = 99.0;
-
-// ------------------ API Key Authentication ------------------
-const validApiKeys = process.env.API_KEYS ? process.env.API_KEYS.split(',') : ['default-key-123'];
-
-const restrictAPI = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-  }
-
-  const apiKey = authHeader.split(' ')[1];
-  if (!validApiKeys.includes(apiKey)) {
-    return res.status(403).json({ error: 'Invalid API key' });
-  }
-
-  next();
-};
 
 // ------------------ Middleware ------------------
 app.use(bodyParser.json());
@@ -110,7 +94,8 @@ function ensureDataFile() {
       diem_lich_su: [],
       da_be_tai: false,
       da_be_xiu: false,
-      cau_moi: {}
+      cau_moi: {},
+      kalman_state: { x: 0.5, P: 1.0 } // New: Kalman filter state
     };
     writeFileAtomic.sync(DATA_FILE, JSON.stringify(init, null, 2));
   }
@@ -123,7 +108,7 @@ function loadData() {
     const data = JSON.parse(txt || '{}');
     return data;
   } catch (e) {
-    return { history: [], pattern: "", pattern_memory: {}, error_memory: {}, dem_sai: 0, pattern_sai: [], diem_lich_su: [], da_be_tai: false, da_be_xiu: false, cau_moi: {} };
+    return { history: [], pattern: "", pattern_memory: {}, error_memory: {}, dem_sai: 0, pattern_sai: [], diem_lich_su: [], da_be_tai: false, da_be_xiu: false, cau_moi: {}, kalman_state: { x: 0.5, P: 1.0 } };
   }
 }
 
@@ -143,6 +128,7 @@ if (!store.diem_lich_su) store.diem_lich_su = [];
 if (store.da_be_tai === undefined) store.da_be_tai = false;
 if (store.da_be_xiu === undefined) store.da_be_xiu = false;
 if (!store.cau_moi) store.cau_moi = {};
+if (!store.kalman_state) store.kalman_state = { x: 0.5, P: 1.0 }; // New: Initialize Kalman state
 let CauMoi = store.cau_moi || {};
 
 // ------------------ Markov counts ------------------
@@ -216,8 +202,68 @@ const CAU_MAU = {
   "2-3": ["TTXXX", "XXTTT"],
   "gãy-4": ["TTTTX", "XXXXT"],
   "gãy-5": ["TTTTTX", "XXXXXT"],
-  "gãy-6": ["TTTTTTX", "XXXXXXT"]
+  "gãy-6": ["TTTTTTX", "XXXXXXT"],
+  "4-2": ["TTTTXX", "XXXXTT"], // New: Added 4-2 pattern
+  "2-1-2": ["TTXTT", "XXTXX"], // New: Added 2-1-2 pattern
+  "3-1-1": ["TTTX", "XXXTT"] // New: Added 3-1-1 pattern
 };
+
+// ------------------ Kalman Filter for Trend Prediction ------------------
+function kalmanFilterPredict(results, kalmanState) {
+  const Q = 0.01; // Process noise covariance
+  const R = 0.1;  // Measurement noise covariance
+  let { x, P } = kalmanState;
+  
+  // Convert results to numerical values (Tài=1, Xỉu=0)
+  const measurement = results.length ? (results[results.length - 1] === 'Tài' ? 1 : 0) : 0.5;
+  
+  // Prediction step
+  const x_pred = x;
+  const P_pred = P + Q;
+  
+  // Update step
+  const K = P_pred / (P_pred + R); // Kalman gain
+  x = x_pred + K * (measurement - x_pred);
+  P = (1 - K) * P_pred;
+  
+  // Store updated state
+  store.kalman_state = { x, P };
+  
+  const probT = clamp(x, 0, 1);
+  const conf = clamp(50 + (1 - P) * 40, 50, 90);
+  return {
+    probT,
+    confidence: conf,
+    explain: `Kalman Filter: P(T)=${(probT * 100).toFixed(1)}%, Variance=${P.toFixed(3)}`
+  };
+}
+
+// ------------------ LSTM-like Simulation ------------------
+function lstmSimulation(results, diceHistory) {
+  if (!results || results.length < 5) return { probT: 0.5, confidence: 50, explain: 'LSTM Sim: not enough data' };
+  
+  // Simple LSTM-like logic using weighted moving average of patterns
+  const seq = results.map(asTX);
+  const weights = [0.4, 0.3, 0.2, 0.1]; // Weights for last 4 results
+  let probT = 0;
+  let totalWeight = 0;
+  
+  for (let i = 1; i <= 4 && i <= seq.length; i++) {
+    const recent = seq.slice(-i).join('');
+    const countT = (recent.match(/T/g) || []).length;
+    const pT = countT / i;
+    probT += pT * weights[i - 1];
+    totalWeight += weights[i - 1];
+  }
+  
+  probT = totalWeight > 0 ? probT / totalWeight : 0.5;
+  const conf = clamp(50 + results.length * 2, 50, 85);
+  return {
+    probT,
+    confidence: conf,
+    explain: `LSTM Sim: Weighted P(T)=${(probT * 100).toFixed(1)}% over last ${Math.min(4, seq.length)} results`
+  };
+}
 
 // ------------------ Markov functions ------------------
 function rebuildMarkov(allResults) {
@@ -533,7 +579,7 @@ function monteCarloEstimate(history, diceHistory, sims = 5000) {
   }
   const probT = tai / sims;
   const conf = Math.round(clamp((Math.abs(probT - 0.5) * 2) * 100, 20, 98));
-  return { probT, doTinCay: conf, explain: `MonteCarlo ${sims} sims, P(T)=${(probT*100).toFixed(1)}%` };
+  return { probT, doTinCay: conf, explain: `MonteCarlo ${sims} sims, P(T)=${(probT * 100).toFixed(1)}%` };
 }
 
 // ------------------ 20 AI Experts ------------------
@@ -768,7 +814,7 @@ function aiSelfLearnProb(results, dice, total, store) {
 }
 
 // ------------------ Combine Votes ------------------
-function combineVotes(probMarkov, patternVote, probLocal, probGlobal, probAI, probTT200, probBayes, probMC, coverMarkov, nLocal, nGlobal, bridgesLabels, expertVotes, probNgram) {
+function combineVotes(probMarkov, patternVote, probLocal, probGlobal, probAI, probTT200, probBayes, probMC, coverMarkov, nLocal, nGlobal, bridgesLabels, expertVotes, probNgram, probKalman, probLSTM) {
   const sT = patternVote['Tài'] || 0;
   const sX = patternVote['Xỉu'] || 0;
   const probPattern = (sT === 0 && sX === 0) ? 0.5 : softmax2(sT, sX, 12.0);
@@ -779,6 +825,8 @@ function combineVotes(probMarkov, patternVote, probLocal, probGlobal, probAI, pr
   const wAI = 0.7;
   const wTT200 = 0.8;
   const wNgram = 0.6;
+  const wKalman = 0.7; // New: Kalman weight
+  const wLSTM = 0.6;   // New: LSTM weight
 
   const WM = W_MARKOV * wM;
   const WP = W_PATTERN;
@@ -789,10 +837,12 @@ function combineVotes(probMarkov, patternVote, probLocal, probGlobal, probAI, pr
   const WBAYES = W_BAYES;
   const WMC = W_MONTECARLO;
   const WNG = W_NGRAM * wNgram;
+  const WKAL = W_KALMAN * wKalman;
+  const WLSTM = W_LSTM_SIM * wLSTM;
 
-  let denom = (WM + WP + WL + WG + WAI + WTT200 + WBAYES + WMC + WNG);
+  let denom = (WM + WP + WL + WG + WAI + WTT200 + WBAYES + WMC + WNG + WKAL + WLSTM);
 
-  let p = (probMarkov * WM + probPattern * WP + probLocal * WL + probGlobal * WG + probAI * WAI + probTT200 * WTT200 + probBayes * WBAYES + probMC * WMC + probNgram * WNG) / denom;
+  let p = (probMarkov * WM + probPattern * WP + probLocal * WL + probGlobal * WG + probAI * WAI + probTT200 * WTT200 + probBayes * WBAYES + probMC * WMC + probNgram * WNG + probKalman * WKAL + probLSTM * WLSTM) / denom;
 
   let expertScore = 0;
   let expertTotalWeight = 0;
@@ -860,6 +910,8 @@ function predictVip(results, diceStr, total, phien) {
   const diceHistory = store.history.map(h => (h.dice && Array.isArray(h.dice)) ? h.dice : (typeof h.dice === 'string' ? h.dice.split('-').map(n => parseInt(n) || 1) : [1, 1, 1]));
   const mc = monteCarloEstimate(results, diceHistory, 5000);
   const ngram = ngramPatternMatching(results, 3, 6);
+  const kalman = kalmanFilterPredict(results, store.kalman_state); // New: Kalman filter
+  const lstm = lstmSimulation(results, diceHistory); // New: LSTM simulation
 
   const experts = [
     ai_cau_bet(results),
@@ -886,14 +938,14 @@ function predictVip(results, diceStr, total, phien) {
 
   const expertVotes = experts.map(e => ({ predict: e.predict, conf: e.conf || e.doTinCay || 50, reason: e.reason || '' }));
 
-  const merged = combineVotes(mk.probT, vote, local.prob, global.prob, ai.probT, tt200.probT, bay.posteriorT || (bay.du_doan === 'Tài' ? bay.doTinCay / 100 : 1 - bay.doTinCay / 100), mc.probT, mk.cover, local.n, global.n, labels, expertVotes, ngram.conf / 100);
+  const merged = combineVotes(mk.probT, vote, local.prob, global.prob, ai.probT, tt200.probT, bay.posteriorT || (bay.du_doan === 'Tài' ? bay.doTinCay / 100 : 1 - bay.doTinCay / 100), mc.probT, mk.cover, local.n, global.n, labels, expertVotes, ngram.conf / 100, kalman.probT, lstm.probT);
 
   const kellyFraction = Math.abs(merged.p - 0.5) * 2;
   const capitalAdvice = `Kelly Criterion: Cược ${(kellyFraction * 100).toFixed(1)}% vốn`;
 
-  const explain = `Mẫu cầu: ${labels.join('; ')}. Markov:${(mk.probT * 100).toFixed(1)}% (${mk.info}). Bayes:${(bay.posteriorT ? (bay.posteriorT * 100).toFixed(1) + '%' : bay.doTinCay + '%')}. MonteCarlo:${(mc.probT * 100).toFixed(1)}%. THUAT_TOAN_200:${(tt200.probT * 100).toFixed(1)}%. AI-self:${(ai.probT * 100).toFixed(1)}%. N-gram:${(ngram.conf).toFixed(1)}% (${ngram.matches.map(m => `${m.pattern}:${m.pT.toFixed(2)}`).join(', ')}). Experts (20): ${expertVotes.map(e => `${e.predict}(${e.conf})`).join(', ')}. Chốt: ${merged.predict} ${merged.confidence}%. ${capitalAdvice}`;
+  const explain = `Mẫu cầu: ${labels.join('; ')}. Markov:${(mk.probT * 100).toFixed(1)}% (${mk.info}). Bayes:${(bay.posteriorT ? (bay.posteriorT * 100).toFixed(1) + '%' : bay.doTinCay + '%')}. MonteCarlo:${(mc.probT * 100).toFixed(1)}%. THUAT_TOAN_200:${(tt200.probT * 100).toFixed(1)}%. AI-self:${(ai.probT * 100).toFixed(1)}%. N-gram:${(ngram.conf).toFixed(1)}%. Kalman:${(kalman.probT * 100).toFixed(1)}%. LSTM Sim:${(lstm.probT * 100).toFixed(1)}%. Experts (20): ${expertVotes.map(e => `${e.predict}(${e.conf})`).join(', ')}. Chốt: ${merged.predict} ${merged.confidence}%. ${capitalAdvice}`;
 
-  return { predict: merged.predict, do_tin_cay: `${merged.confidence.toFixed(1)}%`, explain, meta: { markov: mk, pattern_vote: vote, labels, local, global, ai_selflearn: ai, thuat_toan_200: tt200, bayes: bay, montecarlo: mc, ngram, experts: expertVotes, capitalAdvice } };
+  return { predict: merged.predict, do_tin_cay: `${merged.confidence.toFixed(1)}%`, explain, meta: { markov: mk, pattern_vote: vote, labels, local, global, ai_selflearn: ai, thuat_toan_200: tt200, bayes: bay, montecarlo: mc, ngram, kalman, lstm, experts: expertVotes, capitalAdvice } };
 }
 
 // ------------------ Poller ------------------
@@ -972,7 +1024,7 @@ async function startPollingLoop() {
 startPollingLoop();
 
 // ------------------ Express API ------------------
-app.get('/predict', restrictAPI, async (req, res) => {
+app.get('/predict', async (req, res) => {
   if (!store.history.length) return res.status(503).json({ error: 'No data available yet. Waiting for poll.' });
   const results = store.history.map(h => h.ket_qua);
   const latest = store.history[store.history.length - 1];
@@ -1011,7 +1063,7 @@ app.get('/predict', restrictAPI, async (req, res) => {
   });
 });
 
-app.get('/stats', restrictAPI, (req, res) => {
+app.get('/stats', (req, res) => {
   const results = store.history.map(h => h.ket_qua);
   const n = results.length;
   const cT = results.filter(r => r === 'Tài').length;
@@ -1030,18 +1082,18 @@ app.get('/stats', restrictAPI, (req, res) => {
   });
 });
 
-app.get('/history', restrictAPI, (req, res) => {
+app.get('/history', (req, res) => {
   const limit = Math.min(500, Number(req.query.limit) || 100);
   const out = store.history.slice(-limit);
   res.json({ count: out.length, history: out });
 });
 
-app.get('/poll', restrictAPI, async (req, res) => {
+app.get('/poll', async (req, res) => {
   const r = await pollOnce();
   res.json(r);
 });
 
-app.get('/capital-advice', restrictAPI, (req, res) => {
+app.get('/capital-advice', (req, res) => {
   if (!store.history.length) return res.status(503).json({ error: 'No data available yet.' });
   const results = store.history.map(h => h.ket_qua);
   const latest = store.history[store.history.length - 1];
@@ -1056,7 +1108,7 @@ app.get('/capital-advice', restrictAPI, (req, res) => {
   });
 });
 
-app.get('/md5-check', restrictAPI, (req, res) => {
+app.get('/md5-check', (req, res) => {
   if (!store.history.length) return res.status(503).json({ error: 'No data available yet.' });
   const latest = store.history[store.history.length - 1];
   res.json({
@@ -1066,7 +1118,7 @@ app.get('/md5-check', restrictAPI, (req, res) => {
   });
 });
 
-app.post('/reset', restrictAPI, (req, res) => {
+app.post('/reset', (req, res) => {
   const body = req.body || {};
   if (!body.confirm) return res.status(400).json({ error: 'To reset send { "confirm": true }' });
   store = {
@@ -1079,7 +1131,8 @@ app.post('/reset', restrictAPI, (req, res) => {
     diem_lich_su: [],
     da_be_tai: false,
     da_be_xiu: false,
-    cau_moi: {}
+    cau_moi: {},
+    kalman_state: { x: 0.5, P: 1.0 } // New: Reset Kalman state
   };
   CauMoi = {};
   for (let k = 1; k <= 12; k++) markovCounts[k] = {};
@@ -1090,12 +1143,13 @@ app.post('/reset', restrictAPI, (req, res) => {
 
 // ------------------ Health Check Endpoint ------------------
 app.get('/', (req, res) => {
-  res.json({ message: 'Server is running', version: '1.0.0', id: APP_ID });
+  res.json({ message: 'Server is running', version: '1.1.0', id: APP_ID }); // Updated version
 });
 
 // ------------------ Start Server ------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Taixiu VIP predictor (Upgraded All-in-one with Enhanced Patterns, Markov, N-gram, and MD5) listening on http://0.0.0.0:${PORT}`);
+  console.log(`Taixiu VIP predictor (Upgraded with No API Key, Enhanced Patterns, Kalman Filter, and LSTM Sim) listening on http://0.0.0.0:${PORT}`);
   console.log(`Poll URL: ${POLL_URL} every ${POLL_INTERVAL_SEC}s`);
 });
+
