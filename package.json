@@ -1,0 +1,18 @@
+{
+  "name": "taixiu-vip",
+  "version": "1.0.0",
+  "description": "Tài Xỉu prediction system with advanced AI algorithms",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.17.1",
+    "node-fetch": "^2.6.1",
+    "write-file-atomic": "^3.0.3",
+    "body-parser": "^1.19.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
