@@ -1,65 +1,61 @@
-// server.js
-// Taixiu VIP - All-in-one Upgraded (Markov, Pattern, THUAT_TOAN_200, Bayes, Monte Carlo, 20 AI-cầu, Ensemble, N-gram, MD5)
-// Enhanced with 200 patterns in THUAT_TOAN, 20 AI experts, and capital management
-// Run: node server.js
-
 const express = require('express');
 const fetch = require('node-fetch');
 const fs = require('fs');
-const path = require('path FocalLength: 0.35); // Adjusted for better readability
+const path = require('path');
 const bodyParser = require('body-parser');
 const writeFileAtomic = require('write-file-atomic');
+const cors = require('cors');
 
-// Configuration
+const app = express();
 const DATA_FILE = path.join(__dirname, 'data.json');
-const POLL_URL = "https://toilavinhmaycays23.onrender.com/vinhmaycay"; // API endpoint for data polling
-const POLL_INTERVAL_SEC = 30; // Polling interval in seconds
+const POLL_URL = "https://toilavinhmaycays23.onrender.com/vinhmaycay";
+const POLL_INTERVAL_SEC = 30;
 const POLL_INTERVAL_MS = POLL_INTERVAL_SEC * 1000;
-const MAX_HISTORY = 500; // Maximum history entries to store
-const APP_ID = "Tele@idol_vannhat"; // Application identifier
+const MAX_HISTORY = 500;
+const APP_ID = "Tele@idol_vannhat";
 
-// Algorithm weights for prediction
-let W_MARKOV = 0.20; // Markov chain weight
-let W_PATTERN = 0.20; // Pattern matching weight
-let W_LOCAL_TREND = 0.15; // Local trend weight
-let W_GLOBAL_FREQ = 0.10; // Global frequency weight
-let W_AI_SELF_LEARN = 0.10; // AI self-learning weight
-let W_THUAT_TOAN_200 = 0.15; // THUAT_TOAN_200 weight
-let W_BAYES = 0.10; // Bayes algorithm weight
-let W_MONTECARLO = 0.05; // Monte Carlo simulation weight
-let W_EXPERT_ENSEMBLE = 0.15; // Ensemble of 20 AI experts
-let W_NGRAM = 0.10; // N-gram pattern matching weight
+// ------------------ Config weights ------------------
+let W_MARKOV = 0.20;
+let W_PATTERN = 0.20;
+let W_LOCAL_TREND = 0.15;
+let W_GLOBAL_FREQ = 0.10;
+let W_AI_SELF_LEARN = 0.10;
+let W_THUAT_TOAN_200 = 0.15;
+let W_BAYES = 0.10;
+let W_MONTECARLO = 0.05;
+let W_EXPERT_ENSEMBLE = 0.15;
+let W_NGRAM = 0.10;
 
-const CONF_MIN = 55.0; // Minimum confidence level
-const CONF_MAX = 99.0; // Maximum confidence level
+const CONF_MIN = 55.0;
+const CONF_MAX = 99.0;
+
+// ------------------ API Key Authentication ------------------
+const validApiKeys = process.env.API_KEYS ? process.env.API_KEYS.split(',') : ['default-key-123'];
+
+const restrictAPI = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+  }
+
+  const apiKey = authHeader.split(' ')[1];
+  if (!validApiKeys.includes(apiKey)) {
+    return res.status(403).json({ error: 'Invalid API key' });
+  }
+
+  next();
+};
+
+// ------------------ Middleware ------------------
+app.use(bodyParser.json());
+app.use(cors());
+app.use(express.json());
 
 // ------------------ Utilities ------------------
-
-/**
- * Sleep for a specified time in milliseconds
- * @param {number} ms - Time to sleep in milliseconds
- */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-/**
- * Convert result to 'T' (Tài) or 'X' (Xỉu)
- * @param {string} r - Result string
- * @returns {string} - 'T' or 'X'
- */
 const asTX = r => (r === 'Tài' || r === 'Tai' || r === 'T' ? 'T' : 'X');
-
-/**
- * Convert 'T' or 'X' back to full result name
- * @param {string} ch - 'T' or 'X'
- * @returns {string} - 'Tài' or 'Xỉu'
- */
 const fromTX = ch => (ch === 'T' ? 'Tài' : 'Xỉu');
 
-/**
- * Calculate the current streak length and side
- * @param {string[]} arr - Array of results
- * @returns {Object} - Streak length and side
- */
 function currentStreak(arr) {
   if (!arr.length) return { len: 0, side: null };
   const last = arr[arr.length - 1];
@@ -70,54 +66,25 @@ function currentStreak(arr) {
   return { len, side: last };
 }
 
-/**
- * Calculate binary entropy
- * @param {number} p - Probability
- * @returns {number} - Entropy value
- */
 function entropyBinary(p) {
   if (p <= 0 || p >= 1) return 0;
   return - (p * Math.log2(p) + (1 - p) * Math.log2(1 - p));
 }
 
-/**
- * Calculate streak length
- * @param {string[]} results - Array of results
- * @returns {number} - Streak length
- */
 function doBen(results) {
   return currentStreak(results).len;
 }
 
-/**
- * Softmax function for two probabilities
- * @param {number} sT - Score for Tài
- * @param {number} sX - Score for Xỉu
- * @param {number} scale - Scaling factor
- * @returns {number} - Normalized probability for Tài
- */
 function softmax2(sT, sX, scale = 12.0) {
   const eT = Math.exp(sT / scale);
   const eX = Math.exp(sX / scale);
   return eT / (eT + eX);
 }
 
-/**
- * Clamp a value between min and max
- * @param {number} v - Value
- * @param {number} a - Minimum
- * @param {number} b - Maximum
- * @returns {number} - Clamped value
- */
 function clamp(v, a, b) {
   return Math.max(a, Math.min(b, v));
 }
 
-/**
- * Generate a bridge pattern string (e.g., "cầu 1 2 3")
- * @param {string} chuoiCau - Pattern string
- * @returns {string} - Bridge pattern description
- */
 function tinhLyDo(chuoiCau) {
   if (!chuoiCau) return '';
   let nhom = [];
@@ -130,11 +97,7 @@ function tinhLyDo(chuoiCau) {
   return "cầu " + nhom.join(" ");
 }
 
-// ------------------ Data File Handling ------------------
-
-/**
- * Ensure the data file exists
- */
+// ------------------ Data file handling ------------------
 function ensureDataFile() {
   if (!fs.existsSync(DATA_FILE)) {
     const init = {
@@ -154,40 +117,21 @@ function ensureDataFile() {
 }
 ensureDataFile();
 
-/**
- * Load data from file
- * @returns {Object} - Data object
- */
 function loadData() {
   try {
     const txt = fs.readFileSync(DATA_FILE, 'utf8');
     const data = JSON.parse(txt || '{}');
     return data;
   } catch (e) {
-    return {
-      history: [],
-      pattern: "",
-      pattern_memory: {},
-      error_memory: {},
-      dem_sai: 0,
-      pattern_sai: [],
-      diem_lich_su: [],
-      da_be_tai: false,
-      da_be_xiu: false,
-      cau_moi: {}
-    };
+    return { history: [], pattern: "", pattern_memory: {}, error_memory: {}, dem_sai: 0, pattern_sai: [], diem_lich_su: [], da_be_tai: false, da_be_xiu: false, cau_moi: {} };
   }
 }
 
-/**
- * Save data to file atomically
- * @param {Object} obj - Data object
- */
 function saveDataAtomic(obj) {
   writeFileAtomic.sync(DATA_FILE, JSON.stringify(obj, null, 2));
 }
 
-// ------------------ In-memory State ------------------
+// ------------------ In-memory state ------------------
 let store = loadData();
 if (!store.history) store.history = [];
 if (!store.pattern) store.pattern = "";
@@ -201,25 +145,17 @@ if (store.da_be_xiu === undefined) store.da_be_xiu = false;
 if (!store.cau_moi) store.cau_moi = {};
 let CauMoi = store.cau_moi || {};
 
-// ------------------ Markov Counts ------------------
+// ------------------ Markov counts ------------------
 let markovCounts = {};
-for (let k = 1; k <= 12; k++) markovCounts[k] = {}; // Markov chains up to order 12
+for (let k = 1; k <= 12; k++) markovCounts[k] = {};
 let lastPhien = store.history.length ? store.history[store.history.length - 1].phien : null;
 
-// ------------------ THUAT_TOAN_200 Patterns ------------------
-
-/**
- * Build a set of 200 patterns for THUAT_TOAN_200
- * @returns {Object} - Object containing 200 patterns
- */
+// ------------------ Build THUAT_TOAN_200 ------------------
 function buildThuatToan200() {
   const out = {};
   let idx = 0;
   const lengths = [6, 7, 8, 9, 10];
-  const motifs = [
-    'T', 'X', 'TT', 'XX', 'TX', 'XT', 'TTX', 'XTT', 'TXX', 'XXT', 'TXT', 'XTX',
-    'TTTX', 'XXXT', 'TXTT', 'XTXX', 'TXTX', 'XTXT', 'TTXX', 'XXTT'
-  ];
+  const motifs = ['T', 'X', 'TT', 'XX', 'TX', 'XT', 'TTX', 'XTT', 'TXX', 'XXT', 'TXT', 'XTX', 'TTTX', 'XXXT', 'TXTT', 'XTXX', 'TXTX', 'XTXT', 'TTXX', 'XXTT'];
   for (let L of lengths) {
     for (let m of motifs) {
       if (idx >= 200) break;
@@ -263,7 +199,7 @@ function buildThuatToan200() {
 }
 const THUAT_TOAN_200 = buildThuatToan200();
 
-// ------------------ CAU_MAU Patterns ------------------
+// ------------------ CAU_MAU (expanded) ------------------
 const CAU_MAU = {
   "1-1": ["TXTX", "XTXT", "TXTXT", "XTXTX", "TXTXTX", "XTXTXT"],
   "2-2": ["TTXXTT", "XXTTXX", "TTXXTTXX", "XXTTXXTT"],
@@ -283,12 +219,7 @@ const CAU_MAU = {
   "gãy-6": ["TTTTTTX", "XXXXXXT"]
 };
 
-// ------------------ Markov Functions ------------------
-
-/**
- * Rebuild Markov chains from history
- * @param {string[]} allResults - Array of results
- */
+// ------------------ Markov functions ------------------
 function rebuildMarkov(allResults) {
   for (let k = 1; k <= 12; k++) markovCounts[k] = {};
   if (!allResults || allResults.length < 2) return;
@@ -305,10 +236,6 @@ function rebuildMarkov(allResults) {
   }
 }
 
-/**
- * Update Markov chains incrementally
- * @param {string[]} allResults - Array of results
- */
 function updateMarkovIncremental(allResults) {
   if (!allResults || allResults.length < 2) return;
   const tx = allResults.map(asTX);
@@ -323,11 +250,6 @@ function updateMarkovIncremental(allResults) {
   }
 }
 
-/**
- * Predict using Markov chains
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction object with probT, info, and cover
- */
 function markovPredict(results) {
   if (!results || results.length < 2) return { probT: 0.5, info: "Markov: thiếu dữ liệu", cover: 0 };
   const tx = results.map(asTX);
@@ -357,14 +279,7 @@ function markovPredict(results) {
   return { probT, info, cover: totalFollowers };
 }
 
-// ------------------ Pattern / Sliding Window ------------------
-
-/**
- * Perform sliding window pattern matching
- * @param {string[]} results - Array of results
- * @param {number} maxWindow - Maximum window size
- * @returns {Object} - Vote counts for Tài and Xỉu
- */
+// ------------------ Pattern / Sliding window ------------------
 function slidingWindowVotes(results, maxWindow = 8) {
   const seq = results.map(asTX);
   const nseq = seq.length;
@@ -383,14 +298,7 @@ function slidingWindowVotes(results, maxWindow = 8) {
   return totalVote;
 }
 
-// ------------------ Local & Global Frequency ------------------
-
-/**
- * Analyze local trend over specified lookback periods
- * @param {string[]} results - Array of results
- * @param {number[]} lookbacks - Lookback periods
- * @returns {Object} - Local trend analysis
- */
+// ------------------ Local & Global freq ------------------
 function localTrend(results, lookbacks = [10, 20, 50]) {
   if (!results || !results.length) return { prob: 0.5, n: 0, details: [] };
   const details = [];
@@ -415,11 +323,6 @@ function localTrend(results, lookbacks = [10, 20, 50]) {
   return { prob, n: results.length, details };
 }
 
-/**
- * Calculate global frequency of results
- * @param {string[]} results - Array of results
- * @returns {Object} - Global frequency analysis
- */
 function globalFreq(results) {
   if (!results || !results.length) return { prob: 0.5, n: 0 };
   const cT = results.filter(r => r === 'Tài').length;
@@ -429,14 +332,6 @@ function globalFreq(results) {
 }
 
 // ------------------ N-gram Pattern Matching ------------------
-
-/**
- * Perform N-gram pattern matching
- * @param {string[]} results - Array of results
- * @param {number} minLen - Minimum N-gram length
- * @param {number} maxLen - Maximum N-gram length
- * @returns {Object} - Prediction with confidence and matches
- */
 function ngramPatternMatching(results, minLen = 3, maxLen = 6) {
   if (!results || results.length < minLen) return { predict: 'Tài', conf: 50, matches: [] };
   const seq = results.map(asTX).join('');
@@ -466,18 +361,7 @@ function ngramPatternMatching(results, minLen = 3, maxLen = 6) {
   return { predict, conf, matches };
 }
 
-// ------------------ AI Self-learn Prediction ------------------
-
-/**
- * AI self-learning prediction based on patterns and history
- * @param {string[]} data_kq - Array of results
- * @param {number} dem_sai - Error count
- * @param {string[]} pattern_sai - Error patterns
- * @param {string} xx - Dice string
- * @param {number[]} diem_lich_su - Historical scores
- * @param {Object} data - Data store
- * @returns {Object|null} - Prediction object or null
- */
+// ------------------ duDoanTheoCau (AI self-learn) ------------------
 function duDoanTheoCau(data_kq, dem_sai = 0, pattern_sai = [], xx = "0-0-0", diem_lich_su = [], data = {}) {
   if (!Array.isArray(data_kq) || data_kq.length === 0) return null;
   const cuoi = data_kq[data_kq.length - 1];
@@ -583,14 +467,7 @@ function duDoanTheoCau(data_kq, dem_sai = 0, pattern_sai = [], xx = "0-0-0", die
   return { predict: du_doan, confidence: doTinCay, explain: lyDo };
 }
 
-// ------------------ Bayes Algorithm ------------------
-
-/**
- * Bayesian prediction using multiple feature lengths
- * @param {string[]} history - Array of results
- * @param {number[]} featureLens - Feature lengths
- * @returns {Object} - Prediction with confidence and explanation
- */
+// ------------------ Bayes algorithm ------------------
 function bayesPrediction(history, featureLens = [4, 6, 8]) {
   if (!history || history.length < 3) return { du_doan: 'Tài', doTinCay: 50, explain: 'Bayes: thiếu dữ liệu' };
   let aggPostT = 0;
@@ -628,15 +505,7 @@ function bayesPrediction(history, featureLens = [4, 6, 8]) {
   return { du_doan: predict, doTinCay: clamp(conf, 50, 99), explain, posteriorT, posteriorX };
 }
 
-// ------------------ Monte Carlo Algorithm ------------------
-
-/**
- * Monte Carlo simulation for dice outcomes
- * @param {string[]} history - Array of results
- * @param {number[][]} diceHistory - Array of dice results
- * @param {number} sims - Number of simulations
- * @returns {Object} - Prediction with probability and confidence
- */
+// ------------------ Monte Carlo algorithm ------------------
 function monteCarloEstimate(history, diceHistory, sims = 5000) {
   let counts = [Array(6).fill(1), Array(6).fill(1), Array(6).fill(1)];
   diceHistory.forEach(d => {
@@ -668,12 +537,6 @@ function monteCarloEstimate(history, diceHistory, sims = 5000) {
 }
 
 // ------------------ 20 AI Experts ------------------
-
-/**
- * AI expert for bệt (streak) patterns
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_bet(results) {
   const streak = currentStreak(results);
   if (streak.len >= 4) {
@@ -682,11 +545,6 @@ function ai_cau_bet(results) {
   return { predict: results[results.length - 1], conf: 60, reason: 'AI_cau_bet: no strong bệt' };
 }
 
-/**
- * AI expert for alternating (đảo) patterns
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_dao(results) {
   if (results.length < 6) return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_dao: not enough' };
   const seq = results.slice(-6).map(asTX).join('');
@@ -695,11 +553,6 @@ function ai_cau_dao(results) {
   return { predict: results[results.length - 1], conf: 48, reason: 'AI_cau_dao: none' };
 }
 
-/**
- * AI expert for 3-1-2 patterns
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_312(results) {
   const seq = results.map(asTX).join('');
   if (seq.endsWith('TTTX')) return { predict: 'Tài', conf: 72, reason: 'AI_cau_312: TTTX' };
@@ -707,11 +560,6 @@ function ai_cau_312(results) {
   return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_312: none' };
 }
 
-/**
- * AI expert for biased recent results
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_sonha(results) {
   const last = results.slice(-10);
   const cT = last.filter(x => x === 'Tài').length;
@@ -720,11 +568,6 @@ function ai_cau_sonha(results) {
   return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_sonha: neutral' };
 }
 
-/**
- * AI expert for repeated dice patterns
- * @param {number[][]} diceHistory - Array of dice results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_dice_repeat(diceHistory) {
   if (!diceHistory || diceHistory.length < 3) return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice_repeat: not enough' };
   const map = {};
@@ -737,33 +580,21 @@ function ai_cau_dice_repeat(diceHistory) {
   const faces = top[0].split('-').map(n => Number(n));
   const tot = faces.reduce((a, b) => a + b, 0);
   const pred = tot >= 11 ? 'Tài' : 'Xỉu';
-  return { predict: pred, conf: 65, reason: `AI chipset_dice_repeat: common ${top[0]} x${top[1]}` };
+  return { predict: pred, conf: 65, reason: `AI_cau_dice_repeat: common ${top[0]} x${top[1]}` };
 }
 
-/**
- * AI expert for trending dice totals
- * @param {string[]} results - Array of results
- * @param {number[]} totalsHistory - Array of total scores
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_song(results, totalsHistory) {
   if (!totalsHistory || totalsHistory.length < 6) return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_song: not enough' };
   const last5 = totalsHistory.slice(-5);
   let up = 0, down = 0;
   for (let i = 1; i < last5.length; i++) {
-    if (last5[i] > last5[i - 1]) up++;
-    else if (last5[i] < last5[i - 1]) down++;
+    if (last5[i] > last5[i - 1]) up++; else if (last5[i] < last5[i - 1]) down++;
   }
   if (up >= 3) return { predict: 'Tài', conf: 66, reason: 'AI_cau_song: trending up' };
   if (down >= 3) return { predict: 'Xỉu', conf: 66, reason: 'AI_cau_song: trending down' };
   return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_song: neutral' };
 }
 
-/**
- * AI expert for recent bias analysis
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_bias_near(results) {
   const last = results.slice(-10);
   const cT = last.filter(r => r === 'Tài').length;
@@ -772,11 +603,6 @@ function ai_cau_bias_near(results) {
   return { predict, conf: clamp(conf, 45, 90), reason: `AI_cau_bias_near: last10_T=${cT}` };
 }
 
-/**
- * AI expert for mean reversion based on totals
- * @param {number[]} totalsHistory - Array of total scores
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_mean_reversion(totalsHistory) {
   if (!totalsHistory.length) return { predict: 'Tài', conf: 50, reason: 'AI_cau_mean_reversion: no data' };
   const last = totalsHistory[totalsHistory.length - 1];
@@ -785,11 +611,6 @@ function ai_cau_mean_reversion(totalsHistory) {
   return { predict: 'Tài', conf: 50, reason: 'AI_cau_mean_reversion: Normal total' };
 }
 
-/**
- * AI expert for variance analysis
- * @param {number[]} totalsHistory - Array of total scores
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_variance(totalsHistory) {
   if (!totalsHistory.length || totalsHistory.length < 2) return { predict: 'Tài', conf: 50, reason: 'AI_cau_variance: no data' };
   const totals = totalsHistory.slice(-10);
@@ -800,11 +621,6 @@ function ai_cau_variance(totalsHistory) {
   return { predict: 'Tài', conf: 50, reason: 'AI_cau_variance: Normal variance' };
 }
 
-/**
- * AI expert for entropy analysis
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_entropy(results) {
   const p = globalFreq(results).prob;
   const h = entropyBinary(p);
@@ -812,22 +628,12 @@ function ai_cau_entropy(results) {
   return { predict: 'Xỉu', conf: 55, reason: 'AI_cau_entropy: Low entropy, bias to Xiu' };
 }
 
-/**
- * AI expert for streak probability
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_streak_prob(results) {
   const streak = currentStreak(results);
   if (streak.len >= 5) return { predict: streak.side === 'Tài' ? 'Xỉu' : 'Tài', conf: 80, reason: 'AI_cau_streak_prob: Long streak, expect break' };
   return { predict: streak.side, conf: 70, reason: 'AI_cau_streak_prob: Continue streak' };
 }
 
-/**
- * AI expert for long alternating patterns
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_dao_long(results) {
   if (results.length < 8) return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_dao_long: not enough' };
   const seq = results.slice(-8).map(asTX).join('');
@@ -836,11 +642,6 @@ function ai_cau_dao_long(results) {
   return { predict: results[results.length - 1], conf: 48, reason: 'AI_cau_dao_long: none' };
 }
 
-/**
- * AI expert for 3-2-1 patterns
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_321(results) {
   const seq = results.map(asTX).join('');
   if (seq.endsWith('TTTXX')) return { predict: 'Tài', conf: 75, reason: 'AI_cau_321: TTTXX -> T' };
@@ -848,11 +649,6 @@ function ai_cau_321(results) {
   return { predict: results[results.length - 1], conf: 50, reason: 'AI_cau_321: none' };
 }
 
-/**
- * AI expert for bias in first die
- * @param {number[][]} diceHistory - Array of dice results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_dice1_bias(diceHistory) {
   if (!diceHistory.length) return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice1_bias: no data' };
   const counts = Array(6).fill(0);
@@ -866,11 +662,6 @@ function ai_cau_dice1_bias(diceHistory) {
   return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice1_bias: no bias' };
 }
 
-/**
- * AI expert for bias in second die
- * @param {number[][]} diceHistory - Array of dice results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_dice2_bias(diceHistory) {
   if (!diceHistory.length) return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice2_bias: no data' };
   const counts = Array(6).fill(0);
@@ -884,11 +675,6 @@ function ai_cau_dice2_bias(diceHistory) {
   return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice2_bias: no bias' };
 }
 
-/**
- * AI expert for bias in third die
- * @param {number[][]} diceHistory - Array of dice results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_dice3_bias(diceHistory) {
   if (!diceHistory.length) return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice3_bias: no data' };
   const counts = Array(6).fill(0);
@@ -902,11 +688,6 @@ function ai_cau_dice3_bias(diceHistory) {
   return { predict: 'Tài', conf: 50, reason: 'AI_cau_dice3_bias: no bias' };
 }
 
-/**
- * AI expert for total parity analysis
- * @param {number[]} totalsHistory - Array of total scores
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_total_parity(totalsHistory) {
   if (!totalsHistory.length) return { predict: 'Tài', conf: 50, reason: 'AI_cau_total_parity: no data' };
   const last = totalsHistory[totalsHistory.length - 1];
@@ -914,46 +695,22 @@ function ai_cau_total_parity(totalsHistory) {
   return { predict: pred, conf: 55, reason: `AI_cau_total_parity: ${last % 2 === 0 ? 'Even' : 'Odd'} total` };
 }
 
-/**
- * AI expert for session parity analysis
- * @param {number} phien - Session number
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_phien_parity(phien) {
   const pred = phien % 2 === 0 ? 'Tài' : 'Xỉu';
   return { predict: pred, conf: 52, reason: 'AI_cau_phien_parity: Based on phien parity' };
 }
 
-/**
- * AI expert for opposite prediction
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_opposite(results) {
   const last = results[results.length - 1];
   return { predict: last === 'Tài' ? 'Xỉu' : 'Tài', conf: 55, reason: 'AI_cau_opposite: Opposite to last for diversity' };
 }
 
-/**
- * AI expert for random prediction
- * @param {string[]} results - Array of results
- * @returns {Object} - Prediction with confidence and reason
- */
 function ai_cau_random(results) {
   const pred = Math.random() < 0.5 ? 'Tài' : 'Xỉu';
   return { predict: pred, conf: 50, reason: 'AI_cau_random: Random for ensemble diversity' };
 }
 
 // ------------------ Smart Pattern Analysis ------------------
-
-/**
- * Smart pattern analysis combining multiple methods
- * @param {string[]} results - Array of results
- * @param {string|number[]} dice - Dice results
- * @param {number} total - Total score
- * @param {Object} store - Data store
- * @returns {Object} - Analysis with labels and votes
- */
 function smartPatternAnalysis(results, dice, total, store) {
   const labels = [];
   const vote = { 'Tài': 0.0, 'Xỉu': 0.0 };
@@ -1003,15 +760,6 @@ function smartPatternAnalysis(results, dice, total, store) {
 }
 
 // ------------------ AI Self-learn Probability ------------------
-
-/**
- * Calculate AI self-learn probability
- * @param {string[]} results - Array of results
- * @param {string|number[]} dice - Dice results
- * @param {number} total - Total score
- * @param {Object} store - Data store
- * @returns {Object} - Probability with confidence and explanation
- */
 function aiSelfLearnProb(results, dice, total, store) {
   const ai = duDoanTheoCau(results, store.dem_sai, store.pattern_sai, dice, store.diem_lich_su, store);
   if (!ai) return { probT: 0.5, confidence: 50, explain: 'AI self-learn no data' };
@@ -1020,25 +768,6 @@ function aiSelfLearnProb(results, dice, total, store) {
 }
 
 // ------------------ Combine Votes ------------------
-
-/**
- * Combine predictions from multiple algorithms
- * @param {number} probMarkov - Markov probability
- * @param {Object} patternVote - Pattern vote counts
- * @param {number} probLocal - Local trend probability
- * @param {number} probGlobal - Global frequency probability
- * @param {number} probAI - AI self-learn probability
- * @param {number} probTT200 - THUAT_TOAN_200 probability
- * @param {number} probBayes - Bayes probability
- * @param {number} probMC - Monte Carlo probability
- * @param {number} coverMarkov - Markov coverage
- * @param {number} nLocal - Local trend sample size
- * @param {number} nGlobal - Global frequency sample size
- * @param {string[]} bridgesLabels - Bridge pattern labels
- * @param {Object[]} expertVotes - Expert AI votes
- * @param {number} probNgram - N-gram probability
- * @returns {Object} - Combined prediction with confidence
- */
 function combineVotes(probMarkov, patternVote, probLocal, probGlobal, probAI, probTT200, probBayes, probMC, coverMarkov, nLocal, nGlobal, bridgesLabels, expertVotes, probNgram) {
   const sT = patternVote['Tài'] || 0;
   const sX = patternVote['Xỉu'] || 0;
@@ -1092,12 +821,6 @@ function combineVotes(probMarkov, patternVote, probLocal, probGlobal, probAI, pr
 }
 
 // ------------------ MD5 Randomness Check ------------------
-
-/**
- * Check randomness of MD5 hash
- * @param {Object} data - Data object with MD5 hash
- * @returns {Object} - Randomness check result
- */
 function checkMD5Randomness(data) {
   if (!data.md5) return { isRandom: true, note: 'Không có dữ liệu MD5' };
   const hex = data.md5;
@@ -1112,16 +835,7 @@ function checkMD5Randomness(data) {
   };
 }
 
-// ------------------ Main Prediction Function ------------------
-
-/**
- * Main prediction function
- * @param {string[]} results - Array of results
- * @param {string|number[]} diceStr - Dice results
- * @param {number} total - Total score
- * @param {number} phien - Session number
- * @returns {Object} - Prediction with confidence and metadata
- */
+// ------------------ Main predictVip ------------------
 function predictVip(results, diceStr, total, phien) {
   if (!results || !results.length) return { predict: 'Tài', do_tin_cay: '50.0%', explain: 'Chưa có dữ liệu.' };
 
@@ -1182,12 +896,7 @@ function predictVip(results, diceStr, total, phien) {
   return { predict: merged.predict, do_tin_cay: `${merged.confidence.toFixed(1)}%`, explain, meta: { markov: mk, pattern_vote: vote, labels, local, global, ai_selflearn: ai, thuat_toan_200: tt200, bayes: bay, montecarlo: mc, ngram, experts: expertVotes, capitalAdvice } };
 }
 
-// ------------------ Polling Function ------------------
-
-/**
- * Poll data from API and update store
- * @returns {Object} - Polling result
- */
+// ------------------ Poller ------------------
 async function pollOnce() {
   try {
     const res = await fetch(POLL_URL, { timeout: 9000 });
@@ -1250,9 +959,6 @@ async function pollOnce() {
   }
 }
 
-/**
- * Start polling loop
- */
 let pollingLoopRunning = false;
 async function startPollingLoop() {
   if (pollingLoopRunning) return;
@@ -1266,13 +972,7 @@ async function startPollingLoop() {
 startPollingLoop();
 
 // ------------------ Express API ------------------
-const app = express();
-app.use(bodyParser.json());
-
-/**
- * Predict endpoint
- */
-app.get('/api/vannhatdzuytin-vaicalon-ditmedoinaytaonemoianhnhat', async (req, res) => {
+app.get('/predict', restrictAPI, async (req, res) => {
   if (!store.history.length) return res.status(503).json({ error: 'No data available yet. Waiting for poll.' });
   const results = store.history.map(h => h.ket_qua);
   const latest = store.history[store.history.length - 1];
@@ -1311,10 +1011,7 @@ app.get('/api/vannhatdzuytin-vaicalon-ditmedoinaytaonemoianhnhat', async (req, r
   });
 });
 
-/**
- * Stats endpoint
- */
-app.get('/stats', (req, res) => {
+app.get('/stats', restrictAPI, (req, res) => {
   const results = store.history.map(h => h.ket_qua);
   const n = results.length;
   const cT = results.filter(r => r === 'Tài').length;
@@ -1333,28 +1030,72 @@ app.get('/stats', (req, res) => {
   });
 });
 
-/**
- * History endpoint
- */
-app.get('/history', (req, res) => {
+app.get('/history', restrictAPI, (req, res) => {
   const limit = Math.min(500, Number(req.query.limit) || 100);
   const out = store.history.slice(-limit);
   res.json({ count: out.length, history: out });
 });
 
-/**
- * Poll endpoint
- */
-app.get('/poll', async (req, res) => {
+app.get('/poll', restrictAPI, async (req, res) => {
   const r = await pollOnce();
   res.json(r);
 });
 
-/**
- * Capital advice endpoint
- */
-app.get('/capital-advice', (req, res) => {
+app.get('/capital-advice', restrictAPI, (req, res) => {
   if (!store.history.length) return res.status(503).json({ error: 'No data available yet.' });
   const results = store.history.map(h => h.ket_qua);
   const latest = store.history[store.history.length - 1];
-  const
+  const dice = latest.dice.join('-');
+  const total = latest.total;
+  const phien = latest.phien;
+  const out = predictVip(results, dice, total, phien);
+  res.json({
+    predict: out.predict,
+    do_tin_cay: out.do_tin_cay,
+    capital_advice: out.meta.capitalAdvice
+  });
+});
+
+app.get('/md5-check', restrictAPI, (req, res) => {
+  if (!store.history.length) return res.status(503).json({ error: 'No data available yet.' });
+  const latest = store.history[store.history.length - 1];
+  res.json({
+    phien: latest.phien,
+    md5: latest.md5 || 'Không có',
+    md5Check: latest.md5Check || { isRandom: true, note: 'Không có dữ liệu MD5' }
+  });
+});
+
+app.post('/reset', restrictAPI, (req, res) => {
+  const body = req.body || {};
+  if (!body.confirm) return res.status(400).json({ error: 'To reset send { "confirm": true }' });
+  store = {
+    history: [],
+    pattern: "",
+    pattern_memory: {},
+    error_memory: {},
+    dem_sai: 0,
+    pattern_sai: [],
+    diem_lich_su: [],
+    da_be_tai: false,
+    da_be_xiu: false,
+    cau_moi: {}
+  };
+  CauMoi = {};
+  for (let k = 1; k <= 12; k++) markovCounts[k] = {};
+  lastPhien = null;
+  saveDataAtomic(store);
+  return res.json({ ok: true });
+});
+
+// ------------------ Health Check Endpoint ------------------
+app.get('/', (req, res) => {
+  res.json({ message: 'Server is running', version: '1.0.0', id: APP_ID });
+});
+
+// ------------------ Start Server ------------------
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Taixiu VIP predictor (Upgraded All-in-one with Enhanced Patterns, Markov, N-gram, and MD5) listening on http://0.0.0.0:${PORT}`);
+  console.log(`Poll URL: ${POLL_URL} every ${POLL_INTERVAL_SEC}s`);
+});
